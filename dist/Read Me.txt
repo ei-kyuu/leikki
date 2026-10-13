@@ -1,0 +1,54 @@
+LEIKKI
+A screen saver, made for you.
+
+Aalto's stools, tables and glass, drawn in single lines, tumbling
+gently around your screen. Leikki is Finnish for play.
+
+
+INSTALL (about a minute)
+
+1. Double-click "Install Leikki.command".
+
+2. macOS will probably stop it the first time, with a message that it
+   "can't be opened" because it's from an unidentified developer. That's
+   expected: it's a handmade gift, not something from the App Store.
+   Click Done, then:
+
+     System Settings  >  Privacy & Security
+     scroll down to "Security", click "Open Anyway" next to
+     "Install Leikki.command", and confirm.
+
+   A Terminal window opens, installs Leikki, and opens Screen Saver
+   settings for you.
+
+3. In Screen Saver settings, choose Leikki (under "Other").
+   Click "Options..." to choose:
+     Objects: stools, tables and the tea trolley, or vases
+     Text:    a small poster with world clocks, or "play"
+
+   Then set when it starts under Lock Screen settings, if you like.
+
+
+UPDATES
+
+Leikki keeps itself up to date: once a day it quietly checks for a new
+version and installs it. macOS may show a one-time note that an item was
+added that can run in the background; that's the updater.
+
+
+IF YOU'D RATHER USE TERMINAL
+
+Instead of step 1 and 2, paste this into Terminal and press Return:
+
+  curl -fsSL https://raw.githubusercontent.com/ei-kyuu/leikki/main/dist/install.sh | bash
+
+
+TO REMOVE IT
+
+Double-click "Uninstall Leikki.command" (approve it the same way as the
+installer the first time). That removes the screen saver and the updater.
+
+
+Needs macOS 13 Ventura or later. Works on Apple silicon and Intel Macs.
+Furniture after Alvar Aalto (Artek); vases after the iittala Aalto
+collection. An unofficial, handmade tribute.

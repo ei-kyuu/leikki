@@ -1,0 +1,9 @@
+.DS_Store
+build/
+release/
+preview.app/
+snapshot
+*.saver/
+shots/
+# Akkurat is a licensed Lineto font: never commit or ship it.
+src/fonts/
