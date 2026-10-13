@@ -17,7 +17,7 @@ build=$((count + 1))
 rm -rf release && mkdir release
 scripts/build-saver.sh release            # shared build: no Akkurat
 ( cd release
-  ditto -c -k --keepParent Leikki.saver Leikki.zip
+  ditto -c -k --norsrc --noextattr --keepParent Leikki.saver Leikki.zip
   shasum -a 256 Leikki.zip > Leikki.zip.sha256
   echo "$build $short" > version.txt )
 cp dist/update.sh release/update.sh
