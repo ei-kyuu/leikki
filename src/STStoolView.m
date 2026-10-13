@@ -618,8 +618,11 @@ static const CGFloat kSloshHz = 1.1, kSloshDamping = 0.14, kSloshMax = 0.45;
     _play.hidden = poster;
     if (!poster) { [self layoutPlay]; return; }
 
+    // Aalto's words, with the English directly beneath on the next line.
     CGMutablePathRef q = CGPathCreateMutable();
-    AddText(q, @"Ettehän unohda leikkiä", _font, _margin, _size.height - _margin - CTFontGetCapHeight(_font));
+    CGFloat quoteBase = _size.height - _margin - CTFontGetCapHeight(_font);
+    AddText(q, @"Ettehän unohda leikkiä", _font, _margin, quoteBase);
+    AddText(q, @"Don\u2019t forget to play", _font, _margin, quoteBase - _leading);
     _quote.path = q;
     CGPathRelease(q);
 
