@@ -9,7 +9,7 @@ BIN="$APP/Contents/MacOS/preview"
 
 echo "==> compiling preview app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-clang -target arm64-apple-macos13.0 -fobjc-arc \
+clang -target arm64-apple-macos13.0 -fobjc-arc -O2 \
   -framework Cocoa -framework ScreenSaver -framework QuartzCore -framework CoreText \
   -o "$BIN" \
   src/STStoolView.m src/STStoolModel.m src/PreviewMain.m

@@ -140,6 +140,7 @@ typedef struct {
     // [c, c+1) x [r, r+1) * blockSize points. Rows are stored top first.
     int c0, r0, cols, rows;
     uint32_t *pixels;                    // premultiplied BGRA, cols x rows
+    uint32_t *shown;                     // what's on screen now, to skip unchanged frames
     int nWet;                            // blocks inside the silhouette:
     int *wetIndex;                       //   their pixel index,
     float *wetX, *wetY;                  //   centre in the body's frame (points),
@@ -253,6 +254,7 @@ static CGFloat MinuteFill(CGFloat secs) {
     BOOL _placed;
 
     CFTimeInterval _lastTime;
+    unsigned _frame;
     CADisplayLink *_displayLink API_AVAILABLE(macos(14.0));
 }
 
@@ -313,7 +315,7 @@ static CAShapeLayer *StrokeLayer(uint32_t rgb, CGFloat alpha) {
         CGPathRelease(b->unitPath);
         CGPathRelease(b->unitHidden);
         CGPathRelease(b->unitFill);
-        free(b->pixels); free(b->wetIndex); free(b->wetX); free(b->wetY);
+        free(b->pixels); free(b->shown); free(b->wetIndex); free(b->wetX); free(b->wetY);
         free(b->wetRank); free(b->heights);
         *b = (Body){0};
     }
@@ -401,7 +403,7 @@ static CAShapeLayer *StrokeLayer(uint32_t rgb, CGFloat alpha) {
 // pixel per block, a block holding water if the silhouette covers at least half
 // of it.
 - (void)layoutFill:(Body *)b blockSize:(CGFloat)px {
-    free(b->pixels); free(b->wetIndex); free(b->wetX); free(b->wetY);
+    free(b->pixels); free(b->shown); free(b->wetIndex); free(b->wetX); free(b->wetY);
     free(b->wetRank); free(b->heights);
     CGAffineTransform t = CGAffineTransformMakeScale(_scale, _scale);
     CGPathRef shape = CGPathCreateCopyByTransformingPath(b->unitFill, &t);
@@ -428,6 +430,7 @@ static CAShapeLayer *StrokeLayer(uint32_t rgb, CGFloat alpha) {
     for (int i = 0; i < n; i++) wet += mask[i] >= 128;
     b->nWet = wet;
     b->pixels = calloc(n, sizeof(uint32_t));
+    b->shown = calloc(n, sizeof(uint32_t));
     b->wetIndex = malloc(sizeof(int) * wet);
     b->wetX = malloc(sizeof(float) * wet);
     b->wetY = malloc(sizeof(float) * wet);
@@ -487,6 +490,12 @@ static const CGFloat kSloshHz = 1.1, kSloshDamping = 0.14, kSloshMax = 0.45;
 // surface is mono-fill's dithered band; the blocks stay locked to the piece's
 // own grid, so the waterline steps across them as it turns.
 - (void)updateFills {
+    // Draw the fill straight in the window's colour space: an image in any other
+    // space gets colour-matched on the CPU every time it changes (which, every
+    // frame, cost a whole core on a Display P3 screen).
+    CGColorSpaceRef space = self.window.colorSpace.CGColorSpace ?: self.window.screen.colorSpace.CGColorSpace;
+    if (!space) return;
+    CGColorSpaceRef srgb = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
     CGFloat secs = fmod([NSDate date].timeIntervalSinceReferenceDate, 60.0);
     if (getenv("ST_SECONDS")) secs = atof(getenv("ST_SECONDS"));   // previews/tests
     CGFloat f = MinuteFill(secs), f4 = pow(f, 4);
@@ -511,7 +520,13 @@ static const CGFloat kSloshHz = 1.1, kSloshDamping = 0.14, kSloshMax = 0.45;
         CGFloat band = (hmax - hmin) * kSurfaceBand;
 
         uint32_t rgb = b->rgb;
-        CGFloat R = (rgb >> 16) & 0xFF, G = (rgb >> 8) & 0xFF, B = rgb & 0xFF;
+        CGFloat comps[4] = { ((rgb >> 16) & 0xFF) / 255.0, ((rgb >> 8) & 0xFF) / 255.0, (rgb & 0xFF) / 255.0, 1 };
+        CGColorRef src = CGColorCreate(srgb, comps);
+        CGColorRef dst = CGColorCreateCopyByMatchingToColorSpace(space, kCGRenderingIntentDefault, src, NULL);
+        const CGFloat *dc = dst ? CGColorGetComponents(dst) : comps;
+        CGFloat R = fmin(fmax(dc[0], 0), 1) * 255, G = fmin(fmax(dc[1], 0), 1) * 255, B = fmin(fmax(dc[2], 0), 1) * 255;
+        if (dst) CGColorRelease(dst);
+        CGColorRelease(src);
         memset(b->pixels, 0, sizeof(uint32_t) * b->cols * b->rows);
         if (f > 0) {
             for (int i = 0; i < b->nWet; i++) {
@@ -525,10 +540,12 @@ static const CGFloat kSloshHz = 1.1, kSloshDamping = 0.14, kSloshMax = 0.45;
                                           | ((uint32_t)lround(G * a) << 8) | (uint32_t)lround(B * a);
             }
         }
-        CGColorSpaceRef cs = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
-        CGContextRef ctx = CGBitmapContextCreate(b->pixels, b->cols, b->rows, 8, b->cols * 4, cs,
+        // Only hand Core Animation a new image when a block actually changed.
+        size_t bytes = sizeof(uint32_t) * b->cols * b->rows;
+        if (b->fill.contents && memcmp(b->pixels, b->shown, bytes) == 0) continue;
+        memcpy(b->shown, b->pixels, bytes);
+        CGContextRef ctx = CGBitmapContextCreate(b->pixels, b->cols, b->rows, 8, b->cols * 4, space,
                                                  kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
-        CGColorSpaceRelease(cs);
         CGImageRef img = CGBitmapContextCreateImage(ctx);
         CGContextRelease(ctx);
         [CATransaction begin];
@@ -537,6 +554,7 @@ static const CGFloat kSloshHz = 1.1, kSloshDamping = 0.14, kSloshMax = 0.45;
         [CATransaction commit];
         CGImageRelease(img);
     }
+    CGColorSpaceRelease(srgb);
 }
 
 // One scale for the whole group: its biggest piece reaches the group's `reach`
@@ -888,8 +906,12 @@ static void Collide(Body *a, Body *b, CGPoint ra, CGPoint rb, CGPoint n) {
 
 // For each screen edge, push out the deepest hull vertex and bounce off it.
 - (void)collideWalls:(Body *)b {
-    CGFloat c = cos(b->angle), s = sin(b->angle);
     CGFloat inset = _lineWidth * 0.5 + 1;
+    // Nowhere near an edge (the usual case): nothing to test.
+    CGFloat reach = b->rmaxCM * _scale;
+    if (b->pos.x - reach > inset && b->pos.x + reach < _size.width - inset &&
+        b->pos.y - reach > inset && b->pos.y + reach < _size.height - inset) return;
+    CGFloat c = cos(b->angle), s = sin(b->angle);
     const CGPoint normals[4] = { {1, 0}, {-1, 0}, {0, 1}, {0, -1} };
     const CGFloat offsets[4] = { inset, -(_size.width - inset), inset, -(_size.height - inset) };
     for (int w = 0; w < 4; w++) {
@@ -991,7 +1013,8 @@ static CGFloat DeepestAxis(const CGPoint *A, int na, const CGPoint *B, int nb, C
     [self govern:dt];
     [self stepSlosh:dt];
     [self applyTransforms];
-    [self updateFills];
+    // The water level moves slowly; 30 updates a second is indistinguishable.
+    if ((_frame++ & 1) == 0) [self updateFills];
     [self pollSettings:now];
     [self updateClock];
 }
@@ -1014,33 +1037,52 @@ static CGFloat DeepestAxis(const CGPoint *A, int na, const CGPoint *B, int nb, C
 }
 
 - (void)startAnimation {
-    BOOL link = [self wantsDisplayLink];
-    self.animationTimeInterval = link ? 1.0 : 1.0 / 60.0;
+    self.animationTimeInterval = [self wantsDisplayLink] ? 1.0 : 1.0 / 60.0;
     [super startAnimation];
     _lastTime = 0;
-    if (link) {
-        if (@available(macOS 14.0, *)) {
-            _displayLink = [self displayLinkWithTarget:self selector:@selector(displayLinkFired:)];
-            _displayLink.preferredFrameRateRange = CAFrameRateRangeMake(30, 120, 120);
-            [_displayLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
-        }
+    [self armDisplayLink];
+}
+
+// Frames come from a display link tied to the view's window, capped at 60 fps
+// (plenty for this motion, and half the work on 120 Hz displays). A view with
+// no window has nothing on screen, so it gets no link and does no work: hosts
+// sometimes keep a screen saver view alive long after its window has gone.
+- (void)armDisplayLink {
+    if (![self wantsDisplayLink] || !self.window) return;
+    if (@available(macOS 14.0, *)) {
+        if (_displayLink) return;
+        _displayLink = [self displayLinkWithTarget:self selector:@selector(displayLinkFired:)];
+        _displayLink.preferredFrameRateRange = CAFrameRateRangeMake(30, 60, 60);
+        [_displayLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
     }
 }
 
-- (void)stopAnimation {
+- (void)disarmDisplayLink {
     if (@available(macOS 14.0, *)) {
         [_displayLink invalidate];
         _displayLink = nil;
     }
+}
+
+- (void)viewDidMoveToWindow {
+    [super viewDidMoveToWindow];
+    if (!self.window) [self disarmDisplayLink];
+    else if (self.isAnimating) [self armDisplayLink];
+}
+
+- (void)stopAnimation {
+    [self disarmDisplayLink];
     [super stopAnimation];
 }
 
 - (void)displayLinkFired:(CADisplayLink *)link API_AVAILABLE(macos(14.0)) {
+    if (!self.window) { [self disarmDisplayLink]; return; }
     [self advanceTo:link.targetTimestamp];
 }
 
 - (void)animateOneFrame {
     if (@available(macOS 14.0, *)) { if (_displayLink) return; }
+    if (!self.window) return;
     [self advanceTo:CACurrentMediaTime()];
 }
 
